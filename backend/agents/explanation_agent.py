@@ -61,11 +61,16 @@ def _parse_citations(answer: str, chunks: list[dict]) -> list[Citation]:
             (c["symbol_name"] for c in chunks if c["file_path"] == file_path),
             "",
         )
+        github_url = next(
+            (c.get("github_url") for c in chunks if c["file_path"] == file_path),
+            None,
+        )
         citations.append(Citation(
             file_path=file_path,
             line_start=line_start,
             line_end=line_end,
             symbol_name=symbol_name,
+            github_url=github_url,
         ))
 
     return citations

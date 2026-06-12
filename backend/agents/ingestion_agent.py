@@ -86,6 +86,15 @@ def run(
         print(f"[ingestion:{repo_id}] Parsing AST chunks ...")
         all_chunks = list(iter_repo_chunks(tmpdir, repo_id))
         print(f"[ingestion:{repo_id}] Parsed {len(all_chunks)} chunks.")
+
+        # Compute GitHub deep-link for each chunk so the frontend can link directly
+        github_base_url = github_url.rstrip("/")
+        if github_base_url.endswith(".git"):
+            github_base_url = github_base_url[:-4]
+        for chunk in all_chunks:
+            chunk["github_url"] = (
+                f"{github_base_url}/blob/main/{chunk['file_path']}#L{chunk['start_line']}"
+            )
         if not all_chunks:
             report("indexing", 100)
             return 0
