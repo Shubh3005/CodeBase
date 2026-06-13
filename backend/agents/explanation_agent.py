@@ -36,7 +36,7 @@ def _build_context_block(chunks: list[dict]) -> str:
     for i, chunk in enumerate(chunks, 1):
         header = (
             f"--- Chunk {i}: {chunk.get('symbol_type', 'code')} `{chunk.get('symbol_name', '')}`"
-            f" in {chunk['file_path']} (lines {chunk['start_line']}–{chunk['end_line']}) ---"
+            f" in {chunk['file_path']} (lines {chunk['start_line']}-{chunk['end_line']}) ---"
         )
         parts.append(f"{header}\n{chunk['raw_code']}")
     return "\n\n".join(parts)
@@ -47,7 +47,7 @@ def _parse_citations(answer: str, chunks: list[dict]) -> list[Citation]:
     seen = set()
     citations = []
 
-    pattern = re.compile(r"\[([^\]]+):(\d+)-(\d+)\]")
+    pattern = re.compile(r"\[([^\]]+):(\d+)[–\-](\d+)\]")
     for match in pattern.finditer(answer):
         file_path = match.group(1)
         line_start = int(match.group(2))

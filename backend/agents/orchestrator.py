@@ -26,7 +26,7 @@ async def handle_query(
 ) -> tuple[str, list[Citation], int]:
     """
     Retrieve relevant chunks then generate a cited answer.
-    Runs sync Bedrock + FAISS calls in a thread pool to stay non-blocking.
+    Runs sync FAISS + Groq calls in a thread pool to stay non-blocking.
     """
     chunks = await _run_in_thread(retrieval_agent.retrieve, repo_id, question)
 

@@ -77,8 +77,12 @@ def run(
         # ── 1. Clone ─────────────────────────────────────────────────────────
         report("cloning", 5)
         print(f"[ingestion:{repo_id}] Cloning {github_url} ...")
-        GitRepo.clone_from(github_url, tmpdir, depth=1)
-        print(f"[ingestion:{repo_id}] Clone complete.")
+        git_repo = GitRepo.clone_from(github_url, tmpdir, depth=1)
+        try:
+            default_branch = git_repo.active_branch.name
+        except TypeError:
+            default_branch = "main"
+        print(f"[ingestion:{repo_id}] Clone complete. Default branch: {default_branch}")
         report("cloning", 15)
 
         # ── 2. Parse AST ─────────────────────────────────────────────────────
@@ -93,7 +97,7 @@ def run(
             github_base_url = github_base_url[:-4]
         for chunk in all_chunks:
             chunk["github_url"] = (
-                f"{github_base_url}/blob/main/{chunk['file_path']}#L{chunk['start_line']}"
+                f"{github_base_url}/blob/{default_branch}/{chunk['file_path']}#L{chunk['start_line']}"
             )
         if not all_chunks:
             report("indexing", 100)

@@ -45,16 +45,11 @@ def batch_get_chunks(repo_id: str, chunk_ids: list[str]) -> list[dict]:
     if not chunk_ids:
         return []
 
-    resource = boto3.resource(
-        "dynamodb",
-        region_name=settings.aws_region,
-        aws_access_key_id=settings.aws_access_key_id or None,
-        aws_secret_access_key=settings.aws_secret_access_key or None,
-    )
+    get_table()  # ensure _resource is initialised
     table_name = settings.dynamodb_table_ast_chunks
     keys = [{"repo_id": repo_id, "chunk_id": cid} for cid in chunk_ids]
 
-    response = resource.batch_get_item(
+    response = _resource.batch_get_item(
         RequestItems={table_name: {"Keys": keys}}
     )
     return response["Responses"].get(table_name, [])

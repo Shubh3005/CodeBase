@@ -12,7 +12,7 @@ class IngestRequest(BaseModel):
 class IngestResponse(BaseModel):
     job_id: str
     repo_id: str
-    status: str = "PENDING"
+    status: str = "QUEUED"
 
 
 class JobStatusResponse(BaseModel):

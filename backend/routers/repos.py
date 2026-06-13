@@ -54,7 +54,14 @@ def _run_ingestion(repo_id: str, job_id: str, github_url: str):
         _update_job(job_id, "COMPLETE", 100, "indexing", chunk_count)
     except Exception as exc:
         logger.exception("Ingestion failed for repo %s", repo_id)
-        _update_job(job_id, "FAILED", 0, None, 0, str(exc))
+        raw = str(exc)
+        if "128" in raw or "authentication" in raw.lower() or "not found" in raw.lower():
+            friendly = "Repository not found or is private. Check the URL and make sure the repo is public."
+        elif "timeout" in raw.lower():
+            friendly = "Clone timed out — the repository may be too large or the network is slow."
+        else:
+            friendly = f"Ingestion failed: {raw}"
+        _update_job(job_id, "FAILED", 0, None, 0, friendly)
 
 
 @router.post("/ingest", response_model=IngestResponse, status_code=202)
