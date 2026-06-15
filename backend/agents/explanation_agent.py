@@ -61,10 +61,13 @@ def _parse_citations(answer: str, chunks: list[dict]) -> list[Citation]:
             (c["symbol_name"] for c in chunks if c["file_path"] == file_path),
             "",
         )
-        github_url = next(
+        # Get the repo-level URL base from any chunk for this file, then pin to the
+        # actual cited line (not the first chunk's start line).
+        base_url = next(
             (c.get("github_url") for c in chunks if c["file_path"] == file_path),
             None,
         )
+        github_url = re.sub(r"#L\d+$", f"#L{line_start}", base_url) if base_url else None
         citations.append(Citation(
             file_path=file_path,
             line_start=line_start,

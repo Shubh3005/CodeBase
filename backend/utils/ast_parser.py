@@ -103,6 +103,8 @@ _SUPPORTED = {
 _SKIP_DIRS = {
     ".git", "node_modules", "__pycache__", ".venv", "venv",
     "dist", "build", ".next", "coverage",
+    ".claude", ".github", ".pytest_cache", ".mypy_cache", ".ruff_cache",
+    "migrations", "_bmad",
 }
 
 
