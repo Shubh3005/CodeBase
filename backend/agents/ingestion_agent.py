@@ -1,11 +1,10 @@
 """
-Ingestion Agent — clones a repo, parses AST chunks, embeds with TF-IDF
-(scikit-learn TfidfVectorizer), stores chunks in DynamoDB, and persists
-the FAISS index + fitted vectorizer to S3.
+Ingestion Agent — clones a repo, parses AST chunks, embeds with
+sentence-transformers (all-MiniLM-L6-v2), stores chunks in DynamoDB,
+and persists the FAISS index to S3.
 """
 import logging
 import os
-import pickle
 import shutil
 import tempfile
 
@@ -13,7 +12,6 @@ import boto3
 import faiss
 import numpy as np
 from git import Repo as GitRepo
-from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.preprocessing import normalize
 
 from config import get_settings
@@ -24,6 +22,21 @@ logger = logging.getLogger(__name__)
 settings = get_settings()
 
 _BATCH_DYNAMO = 25  # DynamoDB BatchWriteItem limit
+
+EMBEDDING_MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
+EMBEDDING_DIM = 384  # fixed by the model, not configurable via settings.embed_dimensions
+
+# Module-level cache so the model is loaded once per process, not once per ingestion call.
+_model_cache = {}
+
+
+def _get_embedding_model():
+    if "model" not in _model_cache:
+        from sentence_transformers import SentenceTransformer  # lazy — avoids OMP deadlock at import time
+        print(f"[ingestion] Loading embedding model {EMBEDDING_MODEL_NAME} ...")
+        _model_cache["model"] = SentenceTransformer(EMBEDDING_MODEL_NAME)
+        print("[ingestion] Embedding model loaded.")
+    return _model_cache["model"]
 
 
 def _s3_client():
@@ -46,19 +59,19 @@ def _chunk_text(chunk: dict) -> str:
     return "\n".join(parts)
 
 
-def _save_to_s3(index: faiss.Index, vectorizer: TfidfVectorizer, repo_id: str) -> None:
+def _save_to_s3(index: faiss.Index, repo_id: str) -> None:
+    """
+    Persist only the FAISS index to S3. Unlike TF-IDF, sentence-transformers
+    embeddings require no per-repo fitted vectorizer — the model is fixed and
+    shared across all repos, so there is nothing repo-specific to save besides
+    the index itself.
+    """
     s3 = _s3_client()
 
     idx_tmp = tempfile.mktemp(suffix=".index")
     faiss.write_index(index, idx_tmp)
     s3.upload_file(idx_tmp, settings.s3_bucket, f"faiss/{repo_id}.index")
     os.unlink(idx_tmp)
-
-    vec_tmp = tempfile.mktemp(suffix=".vectorizer")
-    with open(vec_tmp, "wb") as f:
-        pickle.dump(vectorizer, f)
-    s3.upload_file(vec_tmp, settings.s3_bucket, f"faiss/{repo_id}.vectorizer")
-    os.unlink(vec_tmp)
 
 
 def run(
@@ -103,17 +116,25 @@ def run(
             report("indexing", 100)
             return 0
 
-        # ── 3. Embed (TF-IDF) ────────────────────────────────────────────────
+        # ── 3. Embed (sentence-transformers) ───────────────────────────────────
         report("embedding", 30)
         total = len(all_chunks)
         texts = [_chunk_text(c) for c in all_chunks]
 
-        print(f"[ingestion:{repo_id}] Fitting TF-IDF on {total} chunks (max_features={settings.embed_dimensions}) ...")
-        vectorizer = TfidfVectorizer(max_features=settings.embed_dimensions, sublinear_tf=True)
-        sparse_matrix = vectorizer.fit_transform(texts)  # (n_chunks, vocab_size)
+        model = _get_embedding_model()
+        print(f"[ingestion:{repo_id}] Embedding {total} chunks with {EMBEDDING_MODEL_NAME} "
+              f"(dim={EMBEDDING_DIM}) ...")
 
-        # Normalize rows for cosine similarity via inner product
-        dense = normalize(sparse_matrix, norm="l2").toarray().astype(np.float32)
+        # batch_size controls memory/throughput; show_progress_bar off to keep logs clean
+        raw_embeddings = model.encode(
+            texts,
+            batch_size=32,
+            show_progress_bar=False,
+            convert_to_numpy=True,
+        )
+
+        # Normalize rows for cosine similarity via inner product (same as before)
+        dense = normalize(raw_embeddings, norm="l2").astype(np.float32)
         actual_dim = dense.shape[1]
         print(f"[ingestion:{repo_id}] Embedding complete. Dimensions: {actual_dim}.")
         report("embedding", 65)
@@ -132,10 +153,10 @@ def run(
             dynamo.batch_put_chunks(all_chunks[i : i + _BATCH_DYNAMO])
         print(f"[ingestion:{repo_id}] DynamoDB write complete.")
 
-        # ── 5. Persist FAISS index + vectorizer to S3 ─────────────────────────
+        # ── 5. Persist FAISS index to S3 ────────────────────────────────────────
         report("indexing", 90)
-        print(f"[ingestion:{repo_id}] Saving FAISS index and vectorizer to S3 ...")
-        _save_to_s3(index, vectorizer, repo_id)
+        print(f"[ingestion:{repo_id}] Saving FAISS index to S3 ...")
+        _save_to_s3(index, repo_id)
         print(f"[ingestion:{repo_id}] S3 save complete.")
 
         report("indexing", 100)

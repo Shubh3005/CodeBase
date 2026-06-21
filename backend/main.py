@@ -1,3 +1,14 @@
+import os
+# Must be set before any native library (faiss, torch, OpenMP) is imported.
+# On macOS, FAISS and PyTorch each bundle an OpenMP runtime; without these
+# the pthread mutex in abseil/glog deadlocks on first import.
+os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
+os.environ["OMP_NUM_THREADS"] = "1"
+os.environ["MKL_NUM_THREADS"] = "1"
+os.environ["OPENBLAS_NUM_THREADS"] = "1"
+os.environ["VECLIB_MAXIMUM_THREADS"] = "1"
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
@@ -12,7 +23,7 @@ settings = get_settings()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    print("[startup] TF-IDF embeddings — no model download needed.")
+    print("[startup] sentence-transformers embeddings (lazy-loaded on first request).")
     # await init_pool()   # Aurora disabled
     yield
     # await close_pool()  # Aurora disabled
