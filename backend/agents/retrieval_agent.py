@@ -3,6 +3,7 @@ Retrieval Agent — loads the FAISS index for a repo from S3, embeds the
 query with sentence-transformers (all-MiniLM-L6-v2), runs nearest-neighbor
 search, then batch-fetches the matching AST chunks from DynamoDB.
 """
+import json
 import logging
 import os
 import tempfile
@@ -19,6 +20,7 @@ logger = logging.getLogger(__name__)
 settings = get_settings()
 
 _INDEX_CACHE: dict[str, faiss.Index] = {}
+_POSITION_MAP_CACHE: dict[str, list[str]] = {}  # repo_id → [chunk_id, ...] in FAISS vector order
 
 EMBEDDING_MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
 
@@ -65,8 +67,28 @@ def _load_index(repo_id: str) -> faiss.Index:
             os.unlink(tmp)
 
 
+def _load_position_map(repo_id: str) -> list[str]:
+    if repo_id in _POSITION_MAP_CACHE:
+        print(f"[retrieval:{repo_id}] Position map loaded from cache ({len(_POSITION_MAP_CACHE[repo_id])} entries)")
+        return _POSITION_MAP_CACHE[repo_id]
+    print(f"[retrieval:{repo_id}] Downloading position map from S3 (bucket={settings.s3_bucket}) ...")
+    try:
+        response = _s3_client().get_object(
+            Bucket=settings.s3_bucket,
+            Key=f"faiss/{repo_id}.position_map.json",
+        )
+        position_map: list[str] = json.loads(response["Body"].read())
+        _POSITION_MAP_CACHE[repo_id] = position_map
+        print(f"[retrieval:{repo_id}] Position map loaded — {len(position_map)} entries")
+        return position_map
+    except Exception as e:
+        print(f"[retrieval:{repo_id}] ERROR loading position map: {e}")
+        raise
+
+
 def invalidate_index_cache(repo_id: str) -> None:
     _INDEX_CACHE.pop(repo_id, None)
+    _POSITION_MAP_CACHE.pop(repo_id, None)
 
 
 def embed_query(question: str) -> np.ndarray:
@@ -95,15 +117,11 @@ def retrieve(repo_id: str, question: str, top_k: int = 8) -> list[dict]:
     print(f"[retrieval:{repo_id}] FAISS top-{k} scores: {scores[0].tolist()}")
     print(f"[retrieval:{repo_id}] FAISS top-{k} indices: {indices[0].tolist()}")
 
-    all_chunks = dynamo.list_chunks_for_repo(repo_id)
-    print(f"[retrieval:{repo_id}] DynamoDB returned {len(all_chunks)} chunks total; "
-          f"{sum(1 for c in all_chunks if 'embedding_id' in c)} have embedding_id")
-    position_map = {c["embedding_id"]: c["chunk_id"] for c in all_chunks if "embedding_id" in c}
-
+    position_map = _load_position_map(repo_id)
     hit_ids = [
-        position_map[str(pos)]
+        position_map[pos]
         for pos in indices[0]
-        if str(pos) in position_map
+        if 0 <= pos < len(position_map)
     ]
     print(f"[retrieval:{repo_id}] Mapped {len(hit_ids)}/{k} FAISS hits to chunk_ids")
 

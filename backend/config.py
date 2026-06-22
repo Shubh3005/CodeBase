@@ -25,9 +25,6 @@ class Settings(BaseSettings):
     # Groq
     groq_api_key: str = ""
 
-    # Embeddings (TF-IDF max_features cap — actual FAISS dim derived at fit time)
-    embed_dimensions: int = 8192
-
     # App
     environment: str = "development"
     cors_origins: str = "http://localhost:3000"

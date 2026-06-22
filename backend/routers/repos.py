@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException
 
-from agents import ingestion_agent
+from agents import ingestion_agent, retrieval_agent
 # from db import aurora  # Aurora disabled for DynamoDB/S3-only testing
 from db import dynamo
 from models.repo import IngestRequest, IngestResponse, JobStatusResponse, ModuleSummary, RepoSummaryResponse
@@ -51,6 +51,7 @@ def _run_ingestion(repo_id: str, job_id: str, github_url: str):
             github_url=github_url,
             progress_callback=progress_callback,
         )
+        retrieval_agent.invalidate_index_cache(repo_id)
         _update_job(job_id, "COMPLETE", 100, "indexing", chunk_count)
     except Exception as exc:
         logger.exception("Ingestion failed for repo %s", repo_id)

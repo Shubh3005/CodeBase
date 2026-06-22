@@ -15,7 +15,7 @@ _executor = ThreadPoolExecutor(max_workers=4)
 
 
 async def _run_in_thread(fn, *args):
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     return await loop.run_in_executor(_executor, fn, *args)
 
 

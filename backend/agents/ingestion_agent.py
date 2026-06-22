@@ -3,6 +3,7 @@ Ingestion Agent — clones a repo, parses AST chunks, embeds with
 sentence-transformers (all-MiniLM-L6-v2), stores chunks in DynamoDB,
 and persists the FAISS index to S3.
 """
+import json
 import logging
 import os
 import shutil
@@ -59,19 +60,28 @@ def _chunk_text(chunk: dict) -> str:
     return "\n".join(parts)
 
 
-def _save_to_s3(index: faiss.Index, repo_id: str) -> None:
+def _save_to_s3(index: faiss.Index, repo_id: str, position_map: list[str]) -> None:
     """
-    Persist only the FAISS index to S3. Unlike TF-IDF, sentence-transformers
-    embeddings require no per-repo fitted vectorizer — the model is fixed and
-    shared across all repos, so there is nothing repo-specific to save besides
-    the index itself.
+    Persist the FAISS index and position map to S3.
+    position_map[i] is the chunk_id for FAISS vector i, so retrieval never
+    needs to scan DynamoDB just to resolve embedding positions.
     """
     s3 = _s3_client()
 
-    idx_tmp = tempfile.mktemp(suffix=".index")
-    faiss.write_index(index, idx_tmp)
-    s3.upload_file(idx_tmp, settings.s3_bucket, f"faiss/{repo_id}.index")
-    os.unlink(idx_tmp)
+    fd, idx_tmp = tempfile.mkstemp(suffix=".index")
+    os.close(fd)
+    try:
+        faiss.write_index(index, idx_tmp)
+        s3.upload_file(idx_tmp, settings.s3_bucket, f"faiss/{repo_id}.index")
+    finally:
+        os.unlink(idx_tmp)
+
+    s3.put_object(
+        Bucket=settings.s3_bucket,
+        Key=f"faiss/{repo_id}.position_map.json",
+        Body=json.dumps(position_map).encode(),
+        ContentType="application/json",
+    )
 
 
 def run(
@@ -142,6 +152,9 @@ def run(
         for j, chunk in enumerate(all_chunks):
             chunk["embedding_id"] = str(j)
 
+        # position_map[i] == chunk_id for FAISS vector i — built after embedding_ids are assigned
+        position_map = [chunk["chunk_id"] for chunk in all_chunks]
+
         index = faiss.IndexFlatIP(actual_dim)
         index.add(dense)
         print(f"[ingestion:{repo_id}] FAISS index built — {index.ntotal} vectors, dim={actual_dim}.")
@@ -153,10 +166,10 @@ def run(
             dynamo.batch_put_chunks(all_chunks[i : i + _BATCH_DYNAMO])
         print(f"[ingestion:{repo_id}] DynamoDB write complete.")
 
-        # ── 5. Persist FAISS index to S3 ────────────────────────────────────────
+        # ── 5. Persist FAISS index + position map to S3 ──────────────────────
         report("indexing", 90)
-        print(f"[ingestion:{repo_id}] Saving FAISS index to S3 ...")
-        _save_to_s3(index, repo_id)
+        print(f"[ingestion:{repo_id}] Saving FAISS index and position map to S3 ...")
+        _save_to_s3(index, repo_id, position_map)
         print(f"[ingestion:{repo_id}] S3 save complete.")
 
         report("indexing", 100)
