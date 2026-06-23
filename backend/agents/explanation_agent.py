@@ -127,8 +127,19 @@ def compare_answer(
 
     answer_text = response.choices[0].message.content
     tokens_used = response.usage.completion_tokens if response.usage else 0
-    citations_repo1 = _parse_citations(answer_text, chunks_repo1)
-    citations_repo2 = _parse_citations(answer_text, chunks_repo2)
+
+    # Split at the Repo 2 section boundary so each half is only scanned against
+    # its own chunks — prevents Repo 1 citations appearing in Repo 2 and vice versa.
+    split_idx = answer_text.find("[Repo 2:")
+    if split_idx > 0:
+        text_repo1 = answer_text[:split_idx]
+        text_repo2 = answer_text[split_idx:]
+    else:
+        text_repo1 = answer_text
+        text_repo2 = answer_text
+
+    citations_repo1 = _parse_citations(text_repo1, chunks_repo1)
+    citations_repo2 = _parse_citations(text_repo2, chunks_repo2)
 
     return answer_text, citations_repo1, citations_repo2, tokens_used
 
