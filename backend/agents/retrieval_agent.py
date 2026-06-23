@@ -24,6 +24,25 @@ _POSITION_MAP_CACHE: dict[str, list[str]] = {}  # repo_id → [chunk_id, ...] in
 
 EMBEDDING_MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
 
+_ENTRY_POINT_FILES = frozenset({
+    "main.py", "app.py", "index.py", "server.py", "run.py",
+    "__main__.py", "manage.py", "index.js", "index.ts", "app.js", "app.ts",
+})
+
+_ENTRY_POINT_KEYWORDS = (
+    "entry point",
+    "how to run",
+    "how does it start",
+    "how does this start",
+    "how do i run",
+    "getting started",
+    "entrypoint",
+    "main file",
+    "main module",
+    "where does the app start",
+    "where does the application start",
+)
+
 # Module-level cache — same pattern as ingestion_agent.py, so the model is
 # only loaded once per process regardless of how many repos/queries hit it.
 _model_cache = {}
@@ -99,6 +118,15 @@ def embed_query(question: str) -> np.ndarray:
     return dense
 
 
+def _is_entry_point_query(question: str) -> bool:
+    q = question.lower()
+    return any(kw in q for kw in _ENTRY_POINT_KEYWORDS)
+
+
+def _is_entry_point_file(file_path: str) -> bool:
+    return os.path.basename(file_path) in _ENTRY_POINT_FILES
+
+
 def retrieve(repo_id: str, question: str, top_k: int = 8) -> list[dict]:
     """
     Embed the question with sentence-transformers, search FAISS, and
@@ -131,4 +159,27 @@ def retrieve(repo_id: str, question: str, top_k: int = 8) -> list[dict]:
 
     full_chunks = dynamo.batch_get_chunks(repo_id, hit_ids)
     print(f"[retrieval:{repo_id}] batch_get_chunks returned {len(full_chunks)} chunks")
+
+    # Entry-point boost: inject a known entry-point file when the query asks for it
+    # and none of the FAISS hits already cover one. Uses list_chunks_for_repo only on
+    # this conditional path, never on normal queries.
+    if _is_entry_point_query(question) and not any(
+        _is_entry_point_file(c["file_path"]) for c in full_chunks
+    ):
+        all_meta = dynamo.list_chunks_for_repo(repo_id)
+        ep_chunk_id = next(
+            (m["chunk_id"] for m in all_meta if _is_entry_point_file(m["file_path"])),
+            None,
+        )
+        if ep_chunk_id:
+            ep_chunks = dynamo.batch_get_chunks(repo_id, [ep_chunk_id])
+            if ep_chunks:
+                injected = ep_chunks[0]
+                filename = os.path.basename(injected["file_path"])
+                print(f"[retrieval:{repo_id}] Entry-point boost: injected {filename}")
+                if full_chunks:
+                    full_chunks[-1] = injected  # replace lowest-scored hit
+                else:
+                    full_chunks.append(injected)
+
     return full_chunks
