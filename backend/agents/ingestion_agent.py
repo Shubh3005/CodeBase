@@ -8,6 +8,8 @@ import logging
 import os
 import shutil
 import tempfile
+from collections import Counter
+from datetime import datetime, timezone
 
 import boto3
 import faiss
@@ -23,6 +25,22 @@ logger = logging.getLogger(__name__)
 settings = get_settings()
 
 _BATCH_DYNAMO = 25  # DynamoDB BatchWriteItem limit
+
+_EXT_TO_LANGUAGE: dict[str, str] = {
+    ".py": "Python",
+    ".js": "JavaScript", ".jsx": "JavaScript",
+    ".ts": "TypeScript", ".tsx": "TypeScript",
+    ".java": "Java",
+    ".go": "Go",
+    ".rs": "Rust",
+    ".rb": "Ruby",
+    ".cpp": "C/C++", ".cc": "C/C++", ".c": "C/C++",
+}
+
+_SUMMARY_ENTRY_POINTS = frozenset({
+    "main.py", "app.py", "index.py", "index.js", "index.ts",
+    "app.js", "app.ts", "server.py", "run.py",
+})
 
 EMBEDDING_MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
 EMBEDDING_DIM = 384  # fixed by the model, not configurable via settings.embed_dimensions
@@ -82,6 +100,48 @@ def _save_to_s3(index: faiss.Index, repo_id: str, position_map: list[str]) -> No
         Body=json.dumps(position_map).encode(),
         ContentType="application/json",
     )
+
+
+def _generate_summary(repo_id: str, github_base_url: str, all_chunks: list[dict]) -> None:
+    """Build a repo health summary from already-parsed chunks and upload it to S3."""
+    repo_name = "/".join(github_base_url.rstrip("/").split("/")[-2:])
+
+    file_paths = {c["file_path"] for c in all_chunks}
+
+    lang_files: dict[str, set] = {}
+    for fp in file_paths:
+        ext = os.path.splitext(fp)[1].lower()
+        lang = _EXT_TO_LANGUAGE.get(ext, "Other")
+        lang_files.setdefault(lang, set()).add(fp)
+    languages = {lang: len(files) for lang, files in lang_files.items()}
+
+    entry_points = sorted(
+        {os.path.basename(fp) for fp in file_paths if os.path.basename(fp) in _SUMMARY_ENTRY_POINTS}
+    )
+
+    file_chunk_counts = Counter(c["file_path"] for c in all_chunks)
+    largest_files = [
+        {"file_path": fp, "chunk_count": cnt}
+        for fp, cnt in file_chunk_counts.most_common(3)
+    ]
+
+    summary = {
+        "repo_name": repo_name,
+        "total_files": len(file_paths),
+        "total_chunks": len(all_chunks),
+        "languages": languages,
+        "entry_points": entry_points,
+        "largest_files": largest_files,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+    _s3_client().put_object(
+        Bucket=settings.s3_bucket,
+        Key=f"faiss/{repo_id}.summary.json",
+        Body=json.dumps(summary).encode(),
+        ContentType="application/json",
+    )
+    print(f"[ingestion:{repo_id}] Health summary saved to S3.")
 
 
 def run(
@@ -171,6 +231,10 @@ def run(
         print(f"[ingestion:{repo_id}] Saving FAISS index and position map to S3 ...")
         _save_to_s3(index, repo_id, position_map)
         print(f"[ingestion:{repo_id}] S3 save complete.")
+
+        # ── 6. Generate health summary ────────────────────────────────────────
+        print(f"[ingestion:{repo_id}] Generating health summary ...")
+        _generate_summary(repo_id, github_base_url, all_chunks)
 
         report("indexing", 100)
         print(f"[ingestion:{repo_id}] Done — {total} chunks indexed.")

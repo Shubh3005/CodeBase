@@ -1,20 +1,34 @@
 import asyncio
+import json
 import logging
 import re
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 
+import boto3
+from botocore.exceptions import ClientError
 from fastapi import APIRouter, BackgroundTasks, HTTPException
 
 from agents import ingestion_agent, retrieval_agent
 # from db import aurora  # Aurora disabled for DynamoDB/S3-only testing
 from db import dynamo
-from models.repo import IngestRequest, IngestResponse, JobStatusResponse, ModuleSummary, RepoSummaryResponse
+from models.repo import IngestRequest, IngestResponse, JobStatusResponse
+from config import get_settings
 # from utils.auth_utils import get_current_user  # Auth disabled (no Aurora)
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+settings = get_settings()
+
+
+def _s3():
+    return boto3.client(
+        "s3",
+        region_name=settings.aws_region,
+        aws_access_key_id=settings.aws_access_key_id or None,
+        aws_secret_access_key=settings.aws_secret_access_key or None,
+    )
 
 _executor = ThreadPoolExecutor(max_workers=2)
 
@@ -105,27 +119,15 @@ async def get_job(job_id: str):
     return JobStatusResponse(**job)
 
 
-@router.get("/{repo_id}/summary", response_model=RepoSummaryResponse)
+@router.get("/{repo_id}/summary")
 async def get_repo_summary(repo_id: str):
-    chunks = dynamo.list_chunks_for_repo(repo_id)
-    if not chunks:
-        raise HTTPException(status_code=404, detail="Repo not found or not yet ingested")
-
-    files: dict[str, list] = {}
-    for c in chunks:
-        files.setdefault(c["file_path"], []).append(c)
-
-    modules = [
-        ModuleSummary(
-            file_path=fp,
-            summary=f"{len(cs)} symbol(s): {', '.join(c['symbol_name'] for c in cs[:5])}{'…' if len(cs) > 5 else ''}",
-            symbol_count=len(cs),
+    try:
+        resp = _s3().get_object(
+            Bucket=settings.s3_bucket,
+            Key=f"faiss/{repo_id}.summary.json",
         )
-        for fp, cs in sorted(files.items())
-    ]
-
-    return RepoSummaryResponse(
-        repo_id=repo_id,
-        repo_name=repo_id,
-        modules=modules,
-    )
+        return json.loads(resp["Body"].read())
+    except ClientError as exc:
+        if exc.response["Error"]["Code"] in ("NoSuchKey", "404"):
+            raise HTTPException(status_code=404, detail="Summary not found")
+        raise
