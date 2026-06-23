@@ -6,7 +6,7 @@ import asyncio
 import logging
 from concurrent.futures import ThreadPoolExecutor
 
-from agents import explanation_agent, retrieval_agent
+from agents import explanation_agent, ingestion_agent, retrieval_agent
 from models.query import Citation, QueryResponse
 
 logger = logging.getLogger(__name__)
@@ -17,6 +17,33 @@ _executor = ThreadPoolExecutor(max_workers=4)
 async def _run_in_thread(fn, *args):
     loop = asyncio.get_running_loop()
     return await loop.run_in_executor(_executor, fn, *args)
+
+
+async def handle_compare(
+    repo_id1: str,
+    repo_id2: str,
+    question: str,
+    history: list[dict],
+) -> tuple[str, list[Citation], list[Citation], int]:
+    """
+    Retrieve from both repos in parallel, then generate a single comparative answer.
+    """
+    (chunks1, chunks2), (name1, name2) = await asyncio.gather(
+        asyncio.gather(
+            _run_in_thread(retrieval_agent.retrieve, repo_id1, question),
+            _run_in_thread(retrieval_agent.retrieve, repo_id2, question),
+        ),
+        asyncio.gather(
+            _run_in_thread(ingestion_agent.get_repo_name, repo_id1),
+            _run_in_thread(ingestion_agent.get_repo_name, repo_id2),
+        ),
+    )
+
+    answer_text, citations1, citations2, tokens = await _run_in_thread(
+        explanation_agent.compare_answer,
+        question, chunks1, name1, chunks2, name2, history,
+    )
+    return answer_text, citations1, citations2, tokens
 
 
 async def handle_query(

@@ -79,6 +79,60 @@ def _parse_citations(answer: str, chunks: list[dict]) -> list[Citation]:
     return citations
 
 
+def _build_compare_context(
+    chunks1: list[dict], name1: str,
+    chunks2: list[dict], name2: str,
+) -> str:
+    parts = [f"=== Repo 1: {name1} ==="]
+    parts.append(_build_context_block(chunks1) if chunks1 else "No relevant code found in this repo for this question.")
+    parts.append(f"=== Repo 2: {name2} ===")
+    parts.append(_build_context_block(chunks2) if chunks2 else "No relevant code found in this repo for this question.")
+    return "\n\n".join(parts)
+
+
+def compare_answer(
+    question: str,
+    chunks_repo1: list[dict],
+    name1: str,
+    chunks_repo2: list[dict],
+    name2: str,
+    history: list[dict] | None = None,
+) -> tuple[str, list[Citation], list[Citation], int]:
+    """
+    Generate a side-by-side comparison answer for two repos.
+    Returns (answer_text, citations_repo1, citations_repo2, tokens_used).
+    """
+    system_prompt = (
+        "You are comparing two codebases. Answer the question for each codebase separately "
+        "using only the provided code chunks, then summarize the key differences. "
+        f"Label answers as [Repo 1: {name1}] and [Repo 2: {name2}]. "
+        "Never hallucinate — if a repo has no relevant chunks for the question, say so explicitly.\n\n"
+        "Cite every factual claim with [file_path:line_start-line_end] inline. "
+        "Format citations as [path/to/file.py:10-45]."
+    )
+
+    context_block = _build_compare_context(chunks_repo1, name1, chunks_repo2, name2)
+    user_message = f"CODEBASE CONTEXT:\n{context_block}\n\nQUESTION: {question}"
+
+    messages = [{"role": "system", "content": system_prompt}]
+    messages.extend(history or [])
+    messages.append({"role": "user", "content": user_message})
+
+    client = _groq_client()
+    response = client.chat.completions.create(
+        model="llama-3.3-70b-versatile",
+        messages=messages,
+        max_tokens=3000,
+    )
+
+    answer_text = response.choices[0].message.content
+    tokens_used = response.usage.completion_tokens if response.usage else 0
+    citations_repo1 = _parse_citations(answer_text, chunks_repo1)
+    citations_repo2 = _parse_citations(answer_text, chunks_repo2)
+
+    return answer_text, citations_repo1, citations_repo2, tokens_used
+
+
 def answer(
     question: str,
     chunks: list[dict],

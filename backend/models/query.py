@@ -20,3 +20,17 @@ class QueryResponse(BaseModel):
     citations: list[Citation]
     session_id: str
     tokens_used: Optional[int] = None
+
+
+class CompareRequest(BaseModel):
+    repo_ids: list[str] = Field(min_length=2, max_length=2)
+    question: str = Field(min_length=1, max_length=2000)
+    session_id: Optional[str] = None
+
+
+class CompareResponse(BaseModel):
+    answer: str
+    citations_repo1: list[Citation]
+    citations_repo2: list[Citation]
+    session_id: str
+    tokens_used: Optional[int] = None

@@ -144,6 +144,19 @@ def _generate_summary(repo_id: str, github_base_url: str, all_chunks: list[dict]
     print(f"[ingestion:{repo_id}] Health summary saved to S3.")
 
 
+def get_repo_name(repo_id: str) -> str:
+    """Return the owner/repo name stored in the S3 health summary, or a short fallback."""
+    try:
+        resp = _s3_client().get_object(
+            Bucket=settings.s3_bucket,
+            Key=f"faiss/{repo_id}.summary.json",
+        )
+        data = json.loads(resp["Body"].read())
+        return data.get("repo_name") or f"repo-{repo_id[:8]}"
+    except Exception:
+        return f"repo-{repo_id[:8]}"
+
+
 def run(
     repo_id: str,
     github_url: str,
