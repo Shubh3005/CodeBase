@@ -30,8 +30,8 @@ async def handle_compare(
     """
     (chunks1, chunks2), (name1, name2) = await asyncio.gather(
         asyncio.gather(
-            _run_in_thread(retrieval_agent.retrieve, repo_id1, question),
-            _run_in_thread(retrieval_agent.retrieve, repo_id2, question),
+            _run_in_thread(retrieval_agent.retrieve, repo_id1, question, 3),
+            _run_in_thread(retrieval_agent.retrieve, repo_id2, question, 3),
         ),
         asyncio.gather(
             _run_in_thread(ingestion_agent.get_repo_name, repo_id1),
